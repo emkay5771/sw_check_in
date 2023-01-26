@@ -1,9 +1,12 @@
 // add use puppeteer with stealth plugin and use defaults (all evasion techniques)
+require("dotenv").config();
 const fs = require("fs");
 const { DateTime } = require("luxon");
 const puppeteer = require("puppeteer-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-const { sendMonitoringEmail } = require("./emailHelpers");
+const createNewSuccessEmail = require("./createNewSuccessEmail");
+const { writeToCheckInResults } = require("./databaseHelpers");
+const { sendMonitoringEmail, sendUserEmail } = require("./emailHelpers");
 
 const {
   flightDate,
@@ -112,7 +115,7 @@ async function getFlights({ firstName, lastName, confirmationNumber }) {
 }
 
 // check in function here
-async function checkIn({ firstName, lastName, confirmationNumber }) {
+async function checkIn({ firstName, lastName, confirmationNumber, email }) {
   try {
     console.log(
       `checking in ${firstName} ${lastName} starting at ${getCurrentTimeString()}`
@@ -190,14 +193,45 @@ async function checkIn({ firstName, lastName, confirmationNumber }) {
           text: `Checked in at ${checkInClickTime} and got position ${boardingPosition}`,
         });
 
-        // // send the user the successful check in message
-        // if(email) {
-        //   sendMonitoringEmail({
-        //     userEmail: email,
-        //     subject: `Successful Southwest Check In for ${firstName} ${lastName} ${confirmationNumber}`,
-        //     text: `Checked in at ${checkInClickTime} and got position ${boardingPosition}`,
-        //   });
-        // }
+        // get the possible flights and filter by confirmation number
+        const allFlights = JSON.parse(fs.readFileSync("data/flights.json"));
+        const flights = allFlights.filter(
+          (flight) => flight.confirmationNumber === confirmationNumber
+        );
+
+        // send the user the successful check in message
+        const newSuccessEmail = createNewSuccessEmail({
+          firstName,
+          lastName,
+          confirmationNumber,
+          boardingPosition,
+          flights,
+        });
+
+        if (email) {
+          sendUserEmail({
+            userEmail: email,
+            subject: `Successful Southwest automatic check in: ${boardingPosition} (${confirmationNumber})`,
+            html: newSuccessEmail,
+            attachments: [],
+          });
+        }
+
+        // send email to garrett for quality control
+        sendUserEmail({
+          userEmail: process.env.GARRETTS_EMAIL,
+          subject: `Successful Southwest automatic check in: ${boardingPosition} (${confirmationNumber})`,
+          html: newSuccessEmail,
+          attachments: [],
+        });
+
+        // add the result to the check_in_results object
+        writeToCheckInResults({
+          confirmationNumber,
+          boardingPosition,
+          checkInClickTime,
+          flights,
+        });
       } catch (e) {
         console.log(
           `Error 1 happened in SW check in for ${firstName} ${lastName}`

@@ -6,16 +6,14 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const Cron = require("croner");
 
-const {
-  writeFlightsToDatabase,
-  getFlightDetails,
-} = require("./helpers/databaseHelpers");
+const { writeFlightsToDatabase } = require("./helpers/databaseHelpers");
 const { getFlights, checkIn } = require("./helpers/puppeteerHelpers");
 const { DateTime } = require("luxon");
 const {
   sendMonitoringEmail,
   sendUserEmail,
 } = require("./helpers/emailHelpers");
+const createNewSubmissionEmail = require("./helpers/createNewSubmissionEmail");
 
 app.use(bodyParser.json());
 app.use(
@@ -50,6 +48,16 @@ app.get("/upcoming-flights", (_req, res) => {
   res.send(upcomingFlights);
 });
 
+// an end point so that the front end can
+app.get("/check-in-results", async (req, res) => {
+  const checkInResults = fs.readFileSync(
+    "./data/check_in_results.json",
+    "utf-8"
+  );
+
+  res.send(JSON.parse(checkInResults));
+});
+
 app.post("/feedback", async (req, res) => {
   let { feedback, firstName, lastName } = req.body;
   sendMonitoringEmail({
@@ -79,6 +87,7 @@ app.post("/set-up", async (req, res) => {
         firstName,
         lastName,
         confirmationNumber,
+        email,
       });
 
       // only schedule a cron task for a new reservation.
@@ -106,53 +115,34 @@ app.post("/set-up", async (req, res) => {
       // send email to me for tracking
       sendMonitoringEmail({
         subject: `New Southwest set up: ${firstName} ${lastName}`,
-        text: `Confirmation number: ${confirmationNumber}. ${JSON.stringify(
-          flights,
-          null,
-          2
-        )}`,
+        text: `Email: ${
+          email ? email : ""
+        }\nConfirmation number: ${confirmationNumber}.\n
+         ${JSON.stringify(flights, null, 2)}`,
       });
 
+      // send email to the user if email address was provided
       if (email) {
-        // send email to me for tracking
+        const newSubmissionEmail = createNewSubmissionEmail({
+          firstName,
+          lastName,
+          confirmationNumber,
+          flights,
+        });
+
         sendUserEmail({
           userEmail: email,
-          subject: `Your southwest check in is set up!`,
-          // clean up this message into a more user read able version.
-          // Something like what is on the confimation page.
+          subject: `Southwest automatic check in is set up (${confirmationNumber})`,
+          html: newSubmissionEmail,
+          attachments: [],
+        });
 
-          // {flightInfo.flights.map((flight) => {
-          //   {
-          //     /* handle if flight already happened or is within the next 24 hours */
-          //   }
-          //   if (parseFloat(flight.daysUntilFlight) < 0) {
-          //     return (
-          //       <Heading mt="30px" fontSize="16px" key={Math.random()}>
-          //         Your flight on {flight.date} already happened.
-          //       </Heading>
-          //     );
-          //   } else if (parseFloat(flight.daysUntilFlight) < 1) {
-          //     return (
-          //       <Heading mt="30px" fontSize="16px" key={Math.random()}>
-          //         We're checking you into your flight on {flight.date} right
-          //         now.
-          //       </Heading>
-          //     );
-          //   } else {
-          //     return (
-          //       <Heading mt="30px" fontSize="16px" key={Math.random()}>
-          //         You'll be checked in at {flight.checkInTime}
-          //       </Heading>
-          //     );
-          //   }
-          // })}
-
-          // You will be check in
-          text: `Confirmation number: ${confirmationNumber}. ${JSON.stringify(
-            flights,
-            null,
-            2
-          )}`,
+        // send user email for quality control
+        sendUserEmail({
+          userEmail: process.env.GARRETTS_EMAIL,
+          subject: `Southwest automatic check in is set up (${confirmationNumber})`,
+          html: newSubmissionEmail,
+          attachments: [],
         });
       }
 
@@ -209,6 +199,7 @@ async function runCron() {
       confirmationNumber: flight.confirmationNumber,
       firstName: flight.firstName,
       lastName: flight.lastName,
+      email: flight.email ? flight.email : "",
     });
   }
 }
